@@ -1,52 +1,104 @@
 package main
 
 import (
-	"errors"
+	"bufio"
 	"fmt"
+	"log"
 	"net/http"
+	"os"
+	"regexp"
+	"strconv"
+	"strings"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
-var errorRequestFailed = errors.New("Request Failed")
-
-type response struct {
-	url    string
-	status string
+type set map[string]bool
+type video struct {
+	title    string
+	category string
+	views    int
+	likes    int
+	dislikes int
 }
+type ytChannel struct {
+	name        string
+	subscribers int
+	videos      []video
+}
+
+var baseURL string = "https://www.youtube.com"
+var visited set = make(set)
+var relatedVideos = make([]video, 0)
 
 func main() {
-	urls := []string{
-		"https://www.airbnb.com/",
-		"https://www.google.com/",
-		"https://www.amazon.com/",
-		"https://www.google.com/",
-		"https://soundcloud.com/",
-		"https://www.facebook.com/",
-		"https://www.instagram.com/",
-		"https://academy.nomadcoders.co/",
-	}
-	results := make(map[string]string)
-	channel := make(chan response)
-	for _, url := range urls {
-		go hitURL(url, channel)
-	}
-	var message response
-	for i := 0; i < len(urls); i++ {
-		message = <-channel
-		results[message.url] = message.status
-	}
-	for url, result := range results {
-		fmt.Println(url, "Result :", result)
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Scan()
+	ScrapeVideo(scanner.Text(), 2)
+	for _, vids := range relatedVideos {
+		fmt.Println(vids)
 	}
 }
 
-func hitURL(url string, channel chan<- response) {
-	resp, err := http.Get(url)
-	status := "OK"
-	if err != nil || resp.StatusCode >= 400 {
-		status = "FAILED"
+// ScrapeVideo scrapes all the related videos recursively
+func ScrapeVideo(url string, depth int) {
+	if _, visit := visited[url]; depth <= 0 || visit {
+		return
 	}
-	channel <- response{
-		url:    url,
-		status: status,
+	visited[url] = true
+	res, err := http.Get(url)
+	checkRes(res)
+	checkErr(err)
+
+	defer res.Body.Close()
+
+	doc, err := goquery.NewDocumentFromReader(res.Body)
+	checkErr(err)
+	GetVideoInfo(doc)
+	doc.Find("div#content").
+		Each(func(index int, s *goquery.Selection) {
+			s.Find("a.content-link").Each(func(index int, link *goquery.Selection) {
+				nextLink, _ := link.Attr("href")
+				ScrapeVideo(baseURL+nextLink, depth-1)
+			})
+		})
+}
+
+// GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
+func GetVideoInfo(doc *goquery.Document) {
+	doc.Find("div#content").
+		Each(func(index int, vid *goquery.Selection) {
+			title, _ := vid.Find("span.watch-title").Attr("title")
+			category := vid.Find("ul.watch-info-tag-list a").Text()
+			views := stringToInt(vid.Find("div.watch-view-count").Text())
+			likes := stringToInt(vid.Find(".like-button-renderer-like-button span").First().Text())
+			dislikes := stringToInt(vid.Find(".like-button-renderer-dislike-button span").First().Text())
+			relatedVideos = append(relatedVideos, video{
+				title:    title,
+				category: category,
+				views:    views,
+				likes:    likes,
+				dislikes: dislikes,
+			})
+		})
+}
+
+func stringToInt(s string) int {
+	re := regexp.MustCompile("[0-9]")
+	parsed := strings.Join(re.FindAllString(s, -1), "")
+	result, err := strconv.Atoi(parsed)
+	checkErr(err)
+	return result
+}
+
+func checkRes(res *http.Response) {
+	if res.StatusCode != 200 {
+		log.Fatalln("Request Failed with status", res.StatusCode)
+	}
+}
+
+func checkErr(err error) {
+	if err != nil {
+		log.Fatalln(err)
 	}
 }
