@@ -34,7 +34,7 @@ var relatedVideos = make([]video, 0)
 func main() {
 	scanner := bufio.NewScanner(os.Stdin)
 	scanner.Scan()
-	ScrapeVideo(scanner.Text(), 2)
+	ScrapeVideo(scanner.Text(), 3)
 	for _, vids := range relatedVideos {
 		fmt.Println(vids)
 	}
@@ -70,9 +70,13 @@ func GetVideoInfo(doc *goquery.Document) {
 		Each(func(index int, vid *goquery.Selection) {
 			title, _ := vid.Find("span.watch-title").Attr("title")
 			category := vid.Find("ul.watch-info-tag-list a").Text()
+			fmt.Print(title, category)
 			views := stringToInt(vid.Find("div.watch-view-count").Text())
+			fmt.Print(vid.Find("div.watch-view-count").Text())
 			likes := stringToInt(vid.Find(".like-button-renderer-like-button span").First().Text())
+			fmt.Print(vid.Find(".like-button-renderer-like-button span").First().Text())
 			dislikes := stringToInt(vid.Find(".like-button-renderer-dislike-button span").First().Text())
+			fmt.Println(vid.Find(".like-button-renderer-dislike-button span").First().Text())
 			relatedVideos = append(relatedVideos, video{
 				title:    title,
 				category: category,
@@ -84,6 +88,9 @@ func GetVideoInfo(doc *goquery.Document) {
 }
 
 func stringToInt(s string) int {
+	if strings.Compare(s, "") == 0 {
+		return 0
+	}
 	re := regexp.MustCompile("[0-9]")
 	parsed := strings.Join(re.FindAllString(s, -1), "")
 	result, err := strconv.Atoi(parsed)
