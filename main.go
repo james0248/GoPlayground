@@ -15,7 +15,9 @@ import (
 )
 
 type set map[string]bool
-type video struct {
+
+// Video contains information about the Youtube video
+type Video struct {
 	title    string
 	category string
 	views    int
@@ -25,27 +27,21 @@ type video struct {
 type ytChannel struct {
 	name        string
 	subscribers int
-	videos      []video
+	videos      []Video
 }
 
 var (
 	baseURL       = "https://www.youtube.com"
 	visited       = make(set)
-	relatedVideos = make([]video, 0)
+	relatedVideos = make([]Video, 0)
 	visitedMutex  = sync.RWMutex{}
 )
 
 func main() {
 	scanner := bufio.NewScanner(os.Stdin)
-	initChan := make(chan string)
-	vInfo := make(chan video)
-	defer close(vInfo)
-	defer close(initChan)
-
 	scanner.Scan()
 	firstURL := scanner.Text()
-	go ScrapeRelatedVideo(firstURL, 1, initChan, vInfo)
-	checkVisit(<-initChan)
+	ScrapeRelatedVideo(firstURL, 2)
 
 	for _, vids := range relatedVideos {
 		fmt.Println(vids)
@@ -54,52 +50,34 @@ func main() {
 
 // ScrapeRelatedVideo scrapes all the related videos recursively
 // Sends its url through channel to check it is scraped sends empty string if depth is 0
-func ScrapeRelatedVideo(url string, depth int, prevVid chan string, vInfo chan video) {
-	if depth <= 0 {
-		prevVid <- ""
-		return
-	}
-
-	visitedMutex.RLock()
+func ScrapeRelatedVideo(url string, depth int) {
 	_, ok := visited[url]
-	visitedMutex.RUnlock()
-	if ok {
-		prevVid <- url
+	if ok || depth <= 0 {
 		return
 	}
-
-	visitedMutex.Lock()
 	visited[url] = true
-	visitedMutex.Unlock()
 
-	nextVid := make(chan string)
 	res, err := http.Get(url)
 	checkRes(res)
 	checkErr(err)
 	defer res.Body.Close()
+
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	checkErr(err)
-
-	go GetVideoInfo(doc, vInfo)
+	relatedVideos = append(relatedVideos, GetVideoInfo(doc))
 	doc.Find("div#content").
 		Each(func(index int, s *goquery.Selection) {
 			s.Find("a.content-link").Each(func(index int, link *goquery.Selection) {
 				nextLink, _ := link.Attr("href")
-				go ScrapeRelatedVideo(baseURL+nextLink, depth-1, nextVid, vInfo)
+				ScrapeRelatedVideo(baseURL+nextLink, depth-1)
 			})
 		})
 
-	for nextLink := range nextVid {
-		checkVisit(nextLink)
-	}
-	for videos := range vInfo {
-		relatedVideos = append(relatedVideos, videos)
-	}
-	prevVid <- url
 }
 
 // GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
-func GetVideoInfo(doc *goquery.Document, vInfo chan<- video) {
+func GetVideoInfo(doc *goquery.Document) Video {
+	info := Video{}
 	doc.Find("div#content").
 		Each(func(index int, vid *goquery.Selection) {
 			title, _ := vid.Find("span.watch-title").Attr("title")
@@ -107,7 +85,7 @@ func GetVideoInfo(doc *goquery.Document, vInfo chan<- video) {
 			views := stringToInt(vid.Find("div.watch-view-count").Text())
 			likes := stringToInt(vid.Find(".like-button-renderer-like-button span").First().Text())
 			dislikes := stringToInt(vid.Find(".like-button-renderer-dislike-button span").First().Text())
-			vInfo <- video{
+			info = Video{
 				title:    title,
 				category: category,
 				views:    views,
@@ -115,6 +93,7 @@ func GetVideoInfo(doc *goquery.Document, vInfo chan<- video) {
 				dislikes: dislikes,
 			}
 		})
+	return info
 }
 
 func stringToInt(s string) int {
