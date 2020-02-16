@@ -27,6 +27,10 @@ type ytChannel struct {
 	subscribers int
 	videos      []Video
 }
+type tuple struct {
+	url   string
+	depth int
+}
 
 var (
 	baseURL       = "https://www.youtube.com"
@@ -50,7 +54,7 @@ func main() {
 	}
 }
 
-// ScrapeRelatedVideo scrapes all the related videos recursively
+// ScrapeRelatedVideo scrapes all the related videos by BFS
 // Sends its url through channel to check it is scraped sends empty string if depth is 0
 func ScrapeRelatedVideo(url string, depth int, wg *sync.WaitGroup) {
 	rwm.RLock()
@@ -68,7 +72,7 @@ func ScrapeRelatedVideo(url string, depth int, wg *sync.WaitGroup) {
 	nwg := sync.WaitGroup{}
 	checkRes(res)
 	checkErr(err)
-	defer res.Body.Close()
+	checkRes(res)
 
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	checkErr(err)
@@ -127,7 +131,7 @@ func checkVisit(url string) {
 	rwm.RLock()
 	if visit, ok := visited[url]; !visit || !ok {
 		fmt.Println(visit, ok)
-		log.Fatalln("Video is not scraped while visiting", url)
+		panic("Video is not scraped while visiting" + url)
 	}
 	rwm.RUnlock()
 }
@@ -140,6 +144,6 @@ func checkRes(res *http.Response) {
 
 func checkErr(err error) {
 	if err != nil {
-		log.Fatalln(err)
+		panic(err)
 	}
 }
