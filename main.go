@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -18,8 +16,8 @@ type set map[string]bool
 
 // Video contains information about the Youtube video
 type Video struct {
+	url      string
 	title    string
-	category string
 	views    int
 	likes    int
 	dislikes int
@@ -34,66 +32,81 @@ var (
 	baseURL       = "https://www.youtube.com"
 	visited       = make(set)
 	relatedVideos = make([]Video, 0)
-	visitedMutex  = sync.RWMutex{}
+	rwm           = sync.RWMutex{}
+	vidInfo       = make(chan Video)
 )
 
 func main() {
-	scanner := bufio.NewScanner(os.Stdin)
-	scanner.Scan()
-	firstURL := scanner.Text()
-	ScrapeRelatedVideo(firstURL, 2)
+	defer close(vidInfo)
+	firstURL := ""
+	fmt.Scanln(&firstURL)
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	go ScrapeRelatedVideo(firstURL, 3, &wg)
+	wg.Wait()
 
-	for _, vids := range relatedVideos {
-		fmt.Println(vids)
+	for _, videos := range relatedVideos {
+		fmt.Println(videos)
 	}
 }
 
 // ScrapeRelatedVideo scrapes all the related videos recursively
 // Sends its url through channel to check it is scraped sends empty string if depth is 0
-func ScrapeRelatedVideo(url string, depth int) {
+func ScrapeRelatedVideo(url string, depth int, wg *sync.WaitGroup) {
+	rwm.RLock()
 	_, ok := visited[url]
+	rwm.RUnlock()
 	if ok || depth <= 0 {
+		wg.Done()
 		return
 	}
+	rwm.Lock()
 	visited[url] = true
+	rwm.Unlock()
 
 	res, err := http.Get(url)
+	nwg := sync.WaitGroup{}
 	checkRes(res)
 	checkErr(err)
 	defer res.Body.Close()
 
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	checkErr(err)
-	relatedVideos = append(relatedVideos, GetVideoInfo(doc))
+	go GetVideoInfo(doc, vidInfo, url)
+	if info := <-vidInfo; info.title != "" {
+		relatedVideos = append(relatedVideos, info)
+	}
+
 	doc.Find("div#content").
 		Each(func(index int, s *goquery.Selection) {
 			s.Find("a.content-link").Each(func(index int, link *goquery.Selection) {
 				nextLink, _ := link.Attr("href")
-				ScrapeRelatedVideo(baseURL+nextLink, depth-1)
+				nwg.Add(1)
+				go ScrapeRelatedVideo(baseURL+nextLink, depth-1, &nwg)
 			})
 		})
-
+	nwg.Wait()
+	wg.Done()
 }
 
 // GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
-func GetVideoInfo(doc *goquery.Document) Video {
+func GetVideoInfo(doc *goquery.Document, vidInfo chan<- Video, url string) {
 	info := Video{}
 	doc.Find("div#content").
 		Each(func(index int, vid *goquery.Selection) {
 			title, _ := vid.Find("span.watch-title").Attr("title")
-			category := vid.Find("ul.watch-info-tag-list a").Text()
 			views := stringToInt(vid.Find("div.watch-view-count").Text())
 			likes := stringToInt(vid.Find(".like-button-renderer-like-button span").First().Text())
 			dislikes := stringToInt(vid.Find(".like-button-renderer-dislike-button span").First().Text())
 			info = Video{
+				url:      url,
 				title:    title,
-				category: category,
 				views:    views,
 				likes:    likes,
 				dislikes: dislikes,
 			}
 		})
-	return info
+	vidInfo <- info
 }
 
 func stringToInt(s string) int {
@@ -111,12 +124,12 @@ func checkVisit(url string) {
 	if len(url) == 0 {
 		return
 	}
-	visitedMutex.RLock()
+	rwm.RLock()
 	if visit, ok := visited[url]; !visit || !ok {
 		fmt.Println(visit, ok)
 		log.Fatalln("Video is not scraped while visiting", url)
 	}
-	visitedMutex.RUnlock()
+	rwm.RUnlock()
 }
 
 func checkRes(res *http.Response) {
