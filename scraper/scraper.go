@@ -31,13 +31,6 @@ type RelationScraper struct {
 	vidInfo       chan video
 }
 
-// Scraper is an interface for scraping websites
-type Scraper interface {
-	Scrape(url string, depth int, wg *sync.WaitGroup, relation int)
-	getVideoInfo(doc *goquery.Document, vidInfo chan<- video, url string)
-	checkVisit(url string)
-}
-
 var rwm = sync.RWMutex{}
 
 // NewRelationScraper returns a pointer of a new RelationScraper
@@ -54,11 +47,11 @@ func NewRelationScraper(baseURL string, firstURL string) *RelationScraper {
 
 // Scrape uses the recScrape function to scrape videos
 // Called for starting the recursion
-func (rs *RelationScraper) Scrape() {
+func (rs *RelationScraper) Scrape(depth int, relation int) {
 	defer close(rs.vidInfo)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	go rs.recScrape(rs.firstURL, 3, &wg, 10)
+	go rs.recScrape(rs.firstURL, depth, &wg, relation)
 	wg.Wait()
 }
 
@@ -127,18 +120,6 @@ func (rs *RelationScraper) getVideoInfo(doc *goquery.Document, vidInfo chan<- vi
 			}
 		})
 	vidInfo <- info
-}
-
-func (rs *RelationScraper) checkVisit(url string) {
-	if len(url) == 0 {
-		return
-	}
-	rwm.RLock()
-	if visit, ok := rs.visited[url]; !visit || !ok {
-		fmt.Println(visit, ok)
-		panic("Video is not scraped while visiting" + url)
-	}
-	rwm.RUnlock()
 }
 
 func stringToInt(s string) int {
