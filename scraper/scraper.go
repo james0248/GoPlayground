@@ -14,8 +14,7 @@ import (
 
 type set map[string]bool
 
-// Video contains information about the Youtube video
-type Video struct {
+type video struct {
 	url      string
 	title    string
 	views    int
@@ -27,67 +26,74 @@ type Video struct {
 type RelationScraper struct {
 	baseURL       string
 	firstURL      string
-	relatedVideos []Video
+	relatedVideos []video
 	visited       set
-	vidInfo       chan Video
+	vidInfo       chan video
 }
 
 // Scraper is an interface for scraping websites
 type Scraper interface {
 	Scrape(url string, depth int, wg *sync.WaitGroup, relation int)
-	getVideoInfo(doc *goquery.Document, vidInfo chan<- Video, url string)
+	getVideoInfo(doc *goquery.Document, vidInfo chan<- video, url string)
 	checkVisit(url string)
 }
 
-var (
-	rwm = sync.RWMutex{}
-)
+var rwm = sync.RWMutex{}
 
-func main() {
-	YTScraper := RelationScraper{
-		baseURL:       "https://www.youtube.com",
-		relatedVideos: make([]Video, 0),
+// NewRelationScraper returns a pointer of a new RelationScraper
+func NewRelationScraper(baseURL string, firstURL string) *RelationScraper {
+	r := RelationScraper{
+		baseURL:       baseURL,
+		firstURL:      firstURL,
+		relatedVideos: make([]video, 0),
 		visited:       make(set, 0),
-		vidInfo:       make(chan Video),
+		vidInfo:       make(chan video),
 	}
-	defer close(YTScraper.vidInfo)
-	fmt.Scanln(&YTScraper.firstURL)
+	return &r
+}
 
+// Scrape uses the recScrape function to scrape videos
+// Called for starting the recursion
+func (rs *RelationScraper) Scrape() {
+	defer close(rs.vidInfo)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	go YTScraper.Scrape(YTScraper.firstURL, 3, &wg, 10)
+	go rs.recScrape(rs.firstURL, 3, &wg, 10)
 	wg.Wait()
+}
 
-	for _, videos := range YTScraper.relatedVideos {
+// PrintScrapedVideos prints all the videos that are scraped
+func (rs *RelationScraper) PrintScrapedVideos() {
+	for _, videos := range rs.relatedVideos {
 		fmt.Println(videos)
 	}
 }
 
-// Scrape scrapes all the related videos by BFS
+// recScrape scrapes all the related videos by DFS
 // Sends its url through channel to check it is scraped sends empty string if depth is 0
-func (r *RelationScraper) Scrape(url string, depth int, wg *sync.WaitGroup, relation int) {
+func (rs *RelationScraper) recScrape(url string, depth int, wg *sync.WaitGroup, relation int) {
+	defer wg.Done()
 	rwm.RLock()
-	_, ok := r.visited[url]
+	_, ok := rs.visited[url]
 	rwm.RUnlock()
 	if ok || depth <= 0 {
-		wg.Done()
 		return
 	}
 	rwm.Lock()
-	r.visited[url] = true
+	rs.visited[url] = true
 	rwm.Unlock()
 
 	res, err := http.Get(url)
-	nwg := sync.WaitGroup{}
 	checkRes(res)
 	checkErr(err)
-	checkRes(res)
+	defer res.Body.Close()
 
+	nwg := sync.WaitGroup{}
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	checkErr(err)
-	go r.GetVideoInfo(doc, r.vidInfo, url)
-	if info := <-r.vidInfo; info.title != "" {
-		r.relatedVideos = append(r.relatedVideos, info)
+	go rs.getVideoInfo(doc, rs.vidInfo, url)
+	if info := <-rs.vidInfo; info.title != "" {
+		rs.relatedVideos = append(rs.relatedVideos, info)
 	}
 
 	doc.Find("div#content").
@@ -96,24 +102,23 @@ func (r *RelationScraper) Scrape(url string, depth int, wg *sync.WaitGroup, rela
 				if index < relation {
 					nextLink, _ := link.Attr("href")
 					nwg.Add(1)
-					go r.Scrape(r.baseURL+nextLink, depth-1, &nwg, relation)
+					go rs.recScrape(rs.baseURL+nextLink, depth-1, &nwg, relation)
 				}
 			})
 		})
 	nwg.Wait()
-	wg.Done()
 }
 
 // GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
-func (r *RelationScraper) GetVideoInfo(doc *goquery.Document, vidInfo chan<- Video, url string) {
-	info := Video{}
+func (rs *RelationScraper) getVideoInfo(doc *goquery.Document, vidInfo chan<- video, url string) {
+	info := video{}
 	doc.Find("div#content").
 		Each(func(index int, vid *goquery.Selection) {
 			title, _ := vid.Find("span.watch-title").Attr("title")
 			views := stringToInt(vid.Find("div.watch-view-count").Text())
 			likes := stringToInt(vid.Find(".like-button-renderer-like-button span").First().Text())
 			dislikes := stringToInt(vid.Find(".like-button-renderer-dislike-button span").First().Text())
-			info = Video{
+			info = video{
 				url:      url,
 				title:    title,
 				views:    views,
@@ -124,12 +129,12 @@ func (r *RelationScraper) GetVideoInfo(doc *goquery.Document, vidInfo chan<- Vid
 	vidInfo <- info
 }
 
-func (r *RelationScraper) checkVisit(url string) {
+func (rs *RelationScraper) checkVisit(url string) {
 	if len(url) == 0 {
 		return
 	}
 	rwm.RLock()
-	if visit, ok := r.visited[url]; !visit || !ok {
+	if visit, ok := rs.visited[url]; !visit || !ok {
 		fmt.Println(visit, ok)
 		panic("Video is not scraped while visiting" + url)
 	}
