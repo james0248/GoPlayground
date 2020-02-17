@@ -1,4 +1,4 @@
-package main
+package scraper
 
 import (
 	"fmt"
@@ -22,50 +22,59 @@ type Video struct {
 	likes    int
 	dislikes int
 }
-type ytChannel struct {
-	name        string
-	subscribers int
-	videos      []Video
+
+// RelationScraper scrapes Youtube links by recommendations
+type RelationScraper struct {
+	baseURL       string
+	firstURL      string
+	relatedVideos []Video
+	visited       set
+	vidInfo       chan Video
 }
-type tuple struct {
-	url   string
-	depth int
+
+// Scraper is an interface for scraping websites
+type Scraper interface {
+	Scrape(url string, depth int, wg *sync.WaitGroup, relation int)
+	getVideoInfo(doc *goquery.Document, vidInfo chan<- Video, url string)
+	checkVisit(url string)
 }
 
 var (
-	baseURL       = "https://www.youtube.com"
-	visited       = make(set)
-	relatedVideos = make([]Video, 0)
-	rwm           = sync.RWMutex{}
-	vidInfo       = make(chan Video)
+	rwm = sync.RWMutex{}
 )
 
 func main() {
-	defer close(vidInfo)
-	firstURL := ""
-	fmt.Scanln(&firstURL)
+	YTScraper := RelationScraper{
+		baseURL:       "https://www.youtube.com",
+		relatedVideos: make([]Video, 0),
+		visited:       make(set, 0),
+		vidInfo:       make(chan Video),
+	}
+	defer close(YTScraper.vidInfo)
+	fmt.Scanln(&YTScraper.firstURL)
+
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	go ScrapeRelatedVideo(firstURL, 3, &wg)
+	go YTScraper.Scrape(YTScraper.firstURL, 3, &wg, 10)
 	wg.Wait()
 
-	for _, videos := range relatedVideos {
+	for _, videos := range YTScraper.relatedVideos {
 		fmt.Println(videos)
 	}
 }
 
-// ScrapeRelatedVideo scrapes all the related videos by BFS
+// Scrape scrapes all the related videos by BFS
 // Sends its url through channel to check it is scraped sends empty string if depth is 0
-func ScrapeRelatedVideo(url string, depth int, wg *sync.WaitGroup) {
+func (r *RelationScraper) Scrape(url string, depth int, wg *sync.WaitGroup, relation int) {
 	rwm.RLock()
-	_, ok := visited[url]
+	_, ok := r.visited[url]
 	rwm.RUnlock()
 	if ok || depth <= 0 {
 		wg.Done()
 		return
 	}
 	rwm.Lock()
-	visited[url] = true
+	r.visited[url] = true
 	rwm.Unlock()
 
 	res, err := http.Get(url)
@@ -76,17 +85,19 @@ func ScrapeRelatedVideo(url string, depth int, wg *sync.WaitGroup) {
 
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	checkErr(err)
-	go GetVideoInfo(doc, vidInfo, url)
-	if info := <-vidInfo; info.title != "" {
-		relatedVideos = append(relatedVideos, info)
+	go r.GetVideoInfo(doc, r.vidInfo, url)
+	if info := <-r.vidInfo; info.title != "" {
+		r.relatedVideos = append(r.relatedVideos, info)
 	}
 
 	doc.Find("div#content").
 		Each(func(index int, s *goquery.Selection) {
 			s.Find("a.content-link").Each(func(index int, link *goquery.Selection) {
-				nextLink, _ := link.Attr("href")
-				nwg.Add(1)
-				go ScrapeRelatedVideo(baseURL+nextLink, depth-1, &nwg)
+				if index < relation {
+					nextLink, _ := link.Attr("href")
+					nwg.Add(1)
+					go r.Scrape(r.baseURL+nextLink, depth-1, &nwg, relation)
+				}
 			})
 		})
 	nwg.Wait()
@@ -94,7 +105,7 @@ func ScrapeRelatedVideo(url string, depth int, wg *sync.WaitGroup) {
 }
 
 // GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
-func GetVideoInfo(doc *goquery.Document, vidInfo chan<- Video, url string) {
+func (r *RelationScraper) GetVideoInfo(doc *goquery.Document, vidInfo chan<- Video, url string) {
 	info := Video{}
 	doc.Find("div#content").
 		Each(func(index int, vid *goquery.Selection) {
@@ -113,6 +124,18 @@ func GetVideoInfo(doc *goquery.Document, vidInfo chan<- Video, url string) {
 	vidInfo <- info
 }
 
+func (r *RelationScraper) checkVisit(url string) {
+	if len(url) == 0 {
+		return
+	}
+	rwm.RLock()
+	if visit, ok := r.visited[url]; !visit || !ok {
+		fmt.Println(visit, ok)
+		panic("Video is not scraped while visiting" + url)
+	}
+	rwm.RUnlock()
+}
+
 func stringToInt(s string) int {
 	if len(s) == 0 {
 		return 0
@@ -122,18 +145,6 @@ func stringToInt(s string) int {
 	result, err := strconv.Atoi(parsed)
 	checkErr(err)
 	return result
-}
-
-func checkVisit(url string) {
-	if len(url) == 0 {
-		return
-	}
-	rwm.RLock()
-	if visit, ok := visited[url]; !visit || !ok {
-		fmt.Println(visit, ok)
-		panic("Video is not scraped while visiting" + url)
-	}
-	rwm.RUnlock()
 }
 
 func checkRes(res *http.Response) {
