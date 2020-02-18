@@ -31,7 +31,9 @@ type RelationScraper struct {
 	vidInfo       chan video
 }
 
-var rwm = sync.RWMutex{}
+var (
+	rwm = sync.RWMutex{}
+)
 
 // NewRelationScraper returns a pointer of a new RelationScraper
 func NewRelationScraper(baseURL string, firstURL string) *RelationScraper {
@@ -123,7 +125,7 @@ func (rs *RelationScraper) getVideoInfo(doc *goquery.Document, vidInfo chan<- vi
 }
 
 func stringToInt(s string) int {
-	if len(s) == 0 {
+	if s == "" {
 		return 0
 	}
 	re := regexp.MustCompile("[0-9]")

@@ -7,8 +7,12 @@ import (
 )
 
 func main() {
+	fmt.Println("Input starting URL: ")
 	firstURL := ""
-	fmt.Scanln(&firstURL)
+	_, err := fmt.Scanln(&firstURL)
+	if err != nil {
+		panic("Input failed!")
+	}
 	YTScraper := scraper.NewRelationScraper("https://www.youtube.com", firstURL)
 	YTScraper.Scrape(3, 10)
 	YTScraper.PrintScrapedVideos()
