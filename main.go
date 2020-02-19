@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	fmt.Println("Input starting URL: ")
+	fmt.Print("Input starting URL: ")
 	firstURL := ""
 	_, err := fmt.Scanln(&firstURL)
 	if err != nil {

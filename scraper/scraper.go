@@ -1,25 +1,31 @@
 package scraper
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/joho/godotenv"
+	"google.golang.org/api/option"
+	"google.golang.org/api/youtube/v3"
 )
 
 type set map[string]bool
 
 type video struct {
-	url      string
+	id       string
 	title    string
-	views    int
-	likes    int
-	dislikes int
+	views    uint64
+	likes    uint64
+	dislikes uint64
 }
 
 // RelationScraper scrapes Youtube links by recommendations
@@ -29,6 +35,7 @@ type RelationScraper struct {
 	relatedVideos []video
 	visited       set
 	vidInfo       chan video
+	service       *youtube.Service
 }
 
 var (
@@ -36,20 +43,30 @@ var (
 )
 
 // NewRelationScraper returns a pointer of a new RelationScraper
-func NewRelationScraper(baseURL string, firstURL string) *RelationScraper {
-	r := RelationScraper{
+func NewRelationScraper(baseURL, firstURL string) *RelationScraper {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatalln("Error while loading .env")
+	}
+	apiKey := os.Getenv("API_KEY")
+	service, err := youtube.NewService(context.Background(), option.WithAPIKey(apiKey))
+	if err != nil {
+		log.Fatalln(err, "Error while loading youtube API service")
+	}
+	rs := RelationScraper{
 		baseURL:       baseURL,
 		firstURL:      firstURL,
 		relatedVideos: make([]video, 0),
 		visited:       make(set, 0),
 		vidInfo:       make(chan video),
+		service:       service,
 	}
-	return &r
+	return &rs
 }
 
 // Scrape uses the recScrape function to scrape videos
 // Called for starting the recursion
-func (rs *RelationScraper) Scrape(depth int, relation int) {
+func (rs *RelationScraper) Scrape(depth, relation int) {
 	defer close(rs.vidInfo)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -86,7 +103,7 @@ func (rs *RelationScraper) recScrape(url string, depth int, wg *sync.WaitGroup, 
 	nwg := sync.WaitGroup{}
 	doc, err := goquery.NewDocumentFromReader(res.Body)
 	checkErr(err)
-	go rs.getVideoInfo(doc, rs.vidInfo, url)
+	go rs.getVideoInfo(rs.vidInfo, url)
 	if info := <-rs.vidInfo; info.title != "" {
 		rs.relatedVideos = append(rs.relatedVideos, info)
 	}
@@ -105,23 +122,32 @@ func (rs *RelationScraper) recScrape(url string, depth int, wg *sync.WaitGroup, 
 }
 
 // GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
-func (rs *RelationScraper) getVideoInfo(doc *goquery.Document, vidInfo chan<- video, url string) {
+func (rs *RelationScraper) getVideoInfo(vidInfo chan<- video, url string) {
 	info := video{}
-	doc.Find("div#content").
-		Each(func(index int, vid *goquery.Selection) {
-			title, _ := vid.Find("span.watch-title").Attr("title")
-			views := stringToInt(vid.Find("div.watch-view-count").Text())
-			likes := stringToInt(vid.Find(".like-button-renderer-like-button span").First().Text())
-			dislikes := stringToInt(vid.Find(".like-button-renderer-dislike-button span").First().Text())
-			info = video{
-				url:      url,
-				title:    title,
-				views:    views,
-				likes:    likes,
-				dislikes: dislikes,
-			}
-		})
+	res, err := rs.service.Videos.
+		List("snippet,statistics").
+		Id(getID(url)).
+		Do()
+	if err != nil {
+		panic(err)
+	}
+	v := res.Items[0]
+	info = video{
+		id:       v.Id,
+		title:    v.Snippet.Title,
+		views:    v.Statistics.ViewCount,
+		likes:    v.Statistics.LikeCount,
+		dislikes: v.Statistics.DislikeCount,
+	}
 	vidInfo <- info
+}
+
+func getID(s string) string {
+	u, err := url.Parse(s)
+	checkErr(err)
+	m, err := url.ParseQuery(u.RawQuery)
+	checkErr(err)
+	return m["v"][0]
 }
 
 func stringToInt(s string) int {
