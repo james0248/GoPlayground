@@ -13,7 +13,7 @@ func main() {
 	if err != nil {
 		panic("Input failed!")
 	}
-	YTScraper := scraper.NewRelationScraper("https://www.youtube.com", firstURL)
-	YTScraper.Scrape(3, 10)
+	YTScraper := scraper.NewRelationScraper(firstURL)
+	YTScraper.Scrape(3, 5)
 	YTScraper.PrintScrapedVideos()
 }

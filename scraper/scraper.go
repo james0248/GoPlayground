@@ -4,15 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"net/url"
 	"os"
-	"regexp"
-	"strconv"
-	"strings"
 	"sync"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/joho/godotenv"
 	"google.golang.org/api/option"
 	"google.golang.org/api/youtube/v3"
@@ -21,16 +16,14 @@ import (
 type set map[string]bool
 
 type video struct {
-	id       string
-	title    string
-	views    uint64
-	likes    uint64
-	dislikes uint64
+	id    string
+	title string
+	views uint64
+	likes uint64
 }
 
 // RelationScraper scrapes Youtube links by recommendations
 type RelationScraper struct {
-	baseURL       string
 	firstURL      string
 	relatedVideos []video
 	visited       set
@@ -43,7 +36,7 @@ var (
 )
 
 // NewRelationScraper returns a pointer of a new RelationScraper
-func NewRelationScraper(baseURL, firstURL string) *RelationScraper {
+func NewRelationScraper(firstURL string) *RelationScraper {
 	err := godotenv.Load()
 	if err != nil {
 		log.Fatalln("Error while loading .env")
@@ -54,7 +47,6 @@ func NewRelationScraper(baseURL, firstURL string) *RelationScraper {
 		log.Fatalln(err, "Error while loading youtube API service")
 	}
 	rs := RelationScraper{
-		baseURL:       baseURL,
 		firstURL:      firstURL,
 		relatedVideos: make([]video, 0),
 		visited:       make(set, 0),
@@ -70,7 +62,7 @@ func (rs *RelationScraper) Scrape(depth, relation int) {
 	defer close(rs.vidInfo)
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-	go rs.recScrape(rs.firstURL, depth, &wg, relation)
+	go rs.recScrape(getID(rs.firstURL), depth, &wg, relation)
 	wg.Wait()
 }
 
@@ -83,61 +75,57 @@ func (rs *RelationScraper) PrintScrapedVideos() {
 
 // recScrape scrapes all the related videos by DFS
 // Sends its url through channel to check it is scraped sends empty string if depth is 0
-func (rs *RelationScraper) recScrape(url string, depth int, wg *sync.WaitGroup, relation int) {
+func (rs *RelationScraper) recScrape(videoID string, depth int, wg *sync.WaitGroup, relation int) {
 	defer wg.Done()
 	rwm.RLock()
-	_, ok := rs.visited[url]
+	_, ok := rs.visited[videoID]
 	rwm.RUnlock()
 	if ok || depth <= 0 {
 		return
 	}
 	rwm.Lock()
-	rs.visited[url] = true
+	rs.visited[videoID] = true
 	rwm.Unlock()
 
-	res, err := http.Get(url)
-	checkRes(res)
-	checkErr(err)
-	defer res.Body.Close()
-
 	nwg := sync.WaitGroup{}
-	doc, err := goquery.NewDocumentFromReader(res.Body)
-	checkErr(err)
-	go rs.getVideoInfo(rs.vidInfo, url)
-	if info := <-rs.vidInfo; info.title != "" {
+	go rs.getVideoInfo(rs.vidInfo, videoID)
+	if info := <-rs.vidInfo; info.id != "" {
 		rs.relatedVideos = append(rs.relatedVideos, info)
+	} else {
+		return
 	}
 
-	doc.Find("div#content").
-		Each(func(index int, s *goquery.Selection) {
-			s.Find("a.content-link").Each(func(index int, link *goquery.Selection) {
-				if index < relation {
-					nextLink, _ := link.Attr("href")
-					nwg.Add(1)
-					go rs.recScrape(rs.baseURL+nextLink, depth-1, &nwg, relation)
-				}
-			})
-		})
+	res, err := rs.service.Search.List("id").
+		RelatedToVideoId(videoID).
+		Type("video").
+		MaxResults(int64(relation)).
+		Do()
+	checkErr(err)
+
+	for _, relVideoId := range res.Items {
+		nwg.Add(1)
+		go rs.recScrape(relVideoId.Id.VideoId, depth-1, &nwg, relation)
+	}
 	nwg.Wait()
 }
 
 // GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
-func (rs *RelationScraper) getVideoInfo(vidInfo chan<- video, url string) {
+func (rs *RelationScraper) getVideoInfo(vidInfo chan<- video, videoID string) {
 	info := video{}
 	res, err := rs.service.Videos.
 		List("snippet,statistics").
-		Id(getID(url)).
+		Id(videoID).
 		Do()
-	if err != nil {
-		panic(err)
+	if err != nil || len(res.Items) == 0 {
+		vidInfo <- info
+		return
 	}
 	v := res.Items[0]
 	info = video{
-		id:       v.Id,
-		title:    v.Snippet.Title,
-		views:    v.Statistics.ViewCount,
-		likes:    v.Statistics.LikeCount,
-		dislikes: v.Statistics.DislikeCount,
+		id:    v.Id,
+		title: v.Snippet.Title,
+		views: v.Statistics.ViewCount,
+		likes: v.Statistics.LikeCount,
 	}
 	vidInfo <- info
 }
@@ -148,23 +136,6 @@ func getID(s string) string {
 	m, err := url.ParseQuery(u.RawQuery)
 	checkErr(err)
 	return m["v"][0]
-}
-
-func stringToInt(s string) int {
-	if s == "" {
-		return 0
-	}
-	re := regexp.MustCompile("[0-9]")
-	parsed := strings.Join(re.FindAllString(s, -1), "")
-	result, err := strconv.Atoi(parsed)
-	checkErr(err)
-	return result
-}
-
-func checkRes(res *http.Response) {
-	if res.StatusCode != 200 {
-		log.Fatalln("Request Failed with status", res.StatusCode)
-	}
 }
 
 func checkErr(err error) {
