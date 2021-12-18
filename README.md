@@ -4,7 +4,7 @@ Testing Go, Scribbling, Learning, etc
 
 ## Youtube Scraper
 
-Scrapes all the recommended videos from the first video by DFS
+Scrapes all the recommended videos from the first video by BFS
 
 YTScraper module scrapes videos recursively through the recommended videos
 
