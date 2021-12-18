@@ -75,20 +75,20 @@ func (rs *RelationScraper) PrintScrapedVideos() {
 
 // recScrape scrapes all the related videos by DFS
 // Sends its url through channel to check it is scraped sends empty string if depth is 0
-func (rs *RelationScraper) recScrape(videoID string, depth int, wg *sync.WaitGroup, relation int) {
+func (rs *RelationScraper) recScrape(videoId string, depth int, wg *sync.WaitGroup, relation int) {
 	defer wg.Done()
 	rwm.RLock()
-	_, ok := rs.visited[videoID]
+	_, ok := rs.visited[videoId]
 	rwm.RUnlock()
 	if ok || depth <= 0 {
 		return
 	}
 	rwm.Lock()
-	rs.visited[videoID] = true
+	rs.visited[videoId] = true
 	rwm.Unlock()
 
 	nwg := sync.WaitGroup{}
-	go rs.getVideoInfo(rs.vidInfo, videoID)
+	go rs.getVideoInfo(rs.vidInfo, videoId)
 	if info := <-rs.vidInfo; info.id != "" {
 		rs.relatedVideos = append(rs.relatedVideos, info)
 	} else {
@@ -96,7 +96,7 @@ func (rs *RelationScraper) recScrape(videoID string, depth int, wg *sync.WaitGro
 	}
 
 	res, err := rs.service.Search.List("id").
-		RelatedToVideoId(videoID).
+		RelatedToVideoId(videoId).
 		Type("video").
 		MaxResults(int64(relation)).
 		Do()
@@ -110,11 +110,11 @@ func (rs *RelationScraper) recScrape(videoID string, depth int, wg *sync.WaitGro
 }
 
 // GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
-func (rs *RelationScraper) getVideoInfo(vidInfo chan<- video, videoID string) {
+func (rs *RelationScraper) getVideoInfo(vidInfo chan<- video, videoId string) {
 	info := video{}
 	res, err := rs.service.Videos.
 		List("snippet,statistics").
-		Id(videoID).
+		Id(videoId).
 		Do()
 	if err != nil || len(res.Items) == 0 {
 		vidInfo <- info
