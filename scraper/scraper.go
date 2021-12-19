@@ -87,26 +87,25 @@ func (rs *RelationScraper) recScrape(videoId string, depth int, wg *sync.WaitGro
 	rs.visited[videoId] = true
 	rwm.Unlock()
 
-	nwg := sync.WaitGroup{}
 	go rs.getVideoInfo(rs.vidInfo, videoId)
 	if info := <-rs.vidInfo; info.id != "" {
+		rwm.Lock()
 		rs.relatedVideos = append(rs.relatedVideos, info)
+		rwm.Unlock()
+		res, err := rs.service.Search.List("id").
+			RelatedToVideoId(info.id).
+			Type("video").
+			MaxResults(int64(relation)).
+			Do()
+		checkErr(err)
+
+		for _, relVideoId := range res.Items {
+			wg.Add(1)
+			go rs.recScrape(relVideoId.Id.VideoId, depth-1, wg, relation)
+		}
 	} else {
 		return
 	}
-
-	res, err := rs.service.Search.List("id").
-		RelatedToVideoId(videoId).
-		Type("video").
-		MaxResults(int64(relation)).
-		Do()
-	checkErr(err)
-
-	for _, relVideoId := range res.Items {
-		nwg.Add(1)
-		go rs.recScrape(relVideoId.Id.VideoId, depth-1, &nwg, relation)
-	}
-	nwg.Wait()
 }
 
 // GetVideoInfo scrapes informations of current video (title, views, category, likes, etc...)
